@@ -1,0 +1,29 @@
+# 의존성
+node_modules/
+
+# 빌드 산출물 (GitHub Releases로 배포)
+dist/
+
+# 환경 변수 / 시크릿
+.env
+.env.*
+*.pem
+*.key
+credentials*.json
+*.secret
+
+# 로컬 IDE / 에디터 설정
+.claude/settings.local.json
+.vscode/
+.idea/
+
+# 로그
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 임시 파일
+*.tmp
+*.swp
