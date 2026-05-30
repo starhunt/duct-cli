@@ -1,100 +1,104 @@
+**English** | [한국어](README.ko.md)
+
 # Duct-CLI
 
-Codex CLI 기반 이미지 생성 어댑터 for [Star-CLIProxy](https://github.com/starhunt/star-cliproxy).
+A Codex CLI-based image generation adapter for [Star-CLIProxy](https://github.com/starhunt/star-cliproxy).
 
-Codex CLI의 **builtin `image_gen` 2.0 (gpt-image 2.0)** 도구를 단일 바이너리로
-감싸서, 한 번의 `duct image "..."` 호출로 이미지 생성을 수행하고 OpenAI
-Images API 호환 응답을 돌려줍니다. Star-CLIProxy 본체 코드 수정 없이
-`plugins/cliproxy-plugin-duct`로 등록되어 `/v1/images/generations` 엔드포인트에
-자연스럽게 노출됩니다.
+Duct-CLI wraps Codex CLI's **builtin `image_gen` 2.0 (gpt-image 2.0)** tool in a
+single binary. One `duct image "..."` call performs image generation and returns
+an OpenAI Images API-compatible response. With no changes to Star-CLIProxy's core,
+it registers as `plugins/cliproxy-plugin-duct` and exposes itself naturally on the
+`/v1/images/generations` endpoint.
 
-> 인증은 **ChatGPT 계정의 `codex login`**을 그대로 재사용합니다 —
-> 별도의 `OPENAI_API_KEY` 불필요. ChatGPT Pro/Plus 구독자는 추가 과금 없이
-> gpt-image 2.0 이미지 생성을 API처럼 쓸 수 있습니다.
+> Authentication reuses your **ChatGPT account's `codex login`** as-is — no
+> separate `OPENAI_API_KEY` required. ChatGPT Pro/Plus subscribers can use
+> gpt-image 2.0 generation like an API at no extra cost.
 
-## 상태
+## Status
 
-- ✅ MVP — `duct image "..."` / `duct openai:images --in --out` 두 모드 동작
-- ✅ Bun single-file binary (`bun build --compile`) — 런타임 의존성 제로
-- ✅ 한글 인포그래픽/포스터 프롬프트 검증 완료
-- ✅ Star-CLIProxy 플러그인 통합 (`provider: duct`, alias `duct-image` / `gpt-image-2`)
-- ✅ codex 기본 모델(`gpt-5.4`)이 `image_gen` 도구를 호출하는 경로 사용 —
-  ChatGPT 계정에서 `gpt-image-1` 같은 전용 모델명 거부 이슈 우회
+- ✅ MVP — both `duct image "..."` and `duct openai:images --in --out` modes work
+- ✅ Bun single-file binary (`bun build --compile`) — zero runtime dependencies
+- ✅ Validated with Korean infographic/poster prompts
+- ✅ Star-CLIProxy plugin integration (`provider: duct`, alias `duct-image` / `gpt-image-2`)
+- ✅ Uses the path where codex's default model (`gpt-5.4`) invokes the `image_gen`
+  tool — sidesteps the issue of ChatGPT accounts rejecting dedicated model names
+  like `gpt-image-1`
 
-## 동작 원리
+## How it works
 
 ```
-호출자
-  ↓ duct image "프롬프트"
+caller
+  ↓ duct image "prompt"
 duct-cli
   ↓ spawn: codex exec --json --skip-git-repo-check \
   ↓        --dangerously-bypass-approvals-and-sandbox "<wrapped prompt>"
-codex CLI ─── builtin image_gen 2.0 도구 호출
+codex CLI ─── invokes builtin image_gen 2.0 tool
   ↓
-~/.codex/generated_images/{thread_id}/ig_*.png  (codex가 저장)
-  ↑ duct-cli가 디렉토리 폴링으로 감지
+~/.codex/generated_images/{thread_id}/ig_*.png  (saved by codex)
+  ↑ duct-cli detects it via directory polling
 duct-cli
-  ↓ OpenAI Images API 호환 응답 (file:// url 또는 b64_json)
+  ↓ OpenAI Images API-compatible response (file:// url or b64_json)
 ```
 
-- codex는 자신의 thread_id 디렉토리 하위에 생성된 이미지를 비동기로 떨어뜨림
-- duct-cli는 `thread.started` 이벤트에서 thread_id를 얻고 그 디렉토리를
-  1초 간격 폴링, `turn.completed` + grace period(5s)로 종료
-- codex 프로세스는 항상 `stdio: ['ignore', 'pipe', 'pipe']`로 띄워 stdin
-  읽기 루프(`Reading additional input from stdin…`)에 멈추지 않도록 함
+- codex asynchronously drops generated images under its own thread_id directory
+- duct-cli obtains the thread_id from the `thread.started` event, polls that
+  directory at 1-second intervals, and finalizes on `turn.completed` + a grace
+  period (5s)
+- The codex process is always launched with `stdio: ['ignore', 'pipe', 'pipe']`
+  so it never stalls on a stdin read loop (`Reading additional input from stdin…`)
 
-## 빠른 시작 (로컬)
+## Quick start (local)
 
 ```bash
-# 1. 의존성 설치 (Bun 1.2+ 필수)
+# 1. Install dependencies (requires Bun 1.2+)
 bun install
 
-# 2. codex CLI 설치 + 로그인
-# npm i -g @openai/codex  (또는 brew install codex)
+# 2. Install + log in to the codex CLI
+# npm i -g @openai/codex  (or brew install codex)
 codex login
 
-# 3. 직접 실행
-bun run start image "한글 인포그래픽: AI 시대의 일하는 방식"
+# 3. Run directly
+bun run start image "Korean infographic: ways of working in the AI era"
 
-# 4. 빌드 (macOS 단일 바이너리)
+# 4. Build (macOS single binary)
 bun run build
-./dist/duct-macos image "귀여운 오리 캐릭터 일러스트"
+./dist/duct-macos image "cute duck character illustration"
 
-# 5. 타입체크
+# 5. Typecheck
 bun run typecheck
 ```
 
-## 영구 설치 (`~/.duct-cli/`)
+## Permanent install (`~/.duct-cli/`)
 
-Star-CLIProxy 등 외부 도구가 안정적인 경로로 호출할 수 있도록 전용
-바이너리를 홈 디렉토리에 배치합니다.
+Place a dedicated binary in the home directory so external tools like
+Star-CLIProxy can call it via a stable path.
 
 ```bash
 mkdir -p ~/.duct-cli
 bun build ./src/cli.ts --compile --outfile ~/.duct-cli/duct-cli
 
-# 헬스 체크
-~/.duct-cli/duct-cli --help   # 도움말 출력되면 OK
+# Health check
+~/.duct-cli/duct-cli --help   # OK if help text prints
 
-# 스모크 테스트 (실제 codex 호출)
+# Smoke test (real codex call)
 ~/.duct-cli/duct-cli image "a minimalist duct logo" -v
 ```
 
-> Bun `--compile`은 Bun 런타임 + 스크립트를 하나로 묶은 native binary를
-> 만듭니다. 빌드 머신과 다른 OS/arch에는 재빌드 필요.
+> Bun `--compile` produces a native binary bundling the Bun runtime + the script.
+> A rebuild is required for an OS/arch different from the build machine.
 
-## Star-CLIProxy 플러그인 등록
+## Star-CLIProxy plugin registration
 
-1. 플러그인 코드 배치 — Star-CLIProxy 레포의
-   `plugins/cliproxy-plugin-duct/index.js` (이 레포의 참조본과 동일)
-2. `config.yaml`에 등록:
+1. Place the plugin code — Star-CLIProxy repo's
+   `plugins/cliproxy-plugin-duct/index.js` (identical to the reference copy in this repo)
+2. Register in `config.yaml`:
 
    ```yaml
    plugins:
      - path: "./plugins/cliproxy-plugin-duct"
        config:
          cli_path: "/Users/<user>/.duct-cli/duct-cli"
-         default_model: ""            # 비워두면 codex 기본(gpt-5.4) 사용 — 권장
+         default_model: ""            # leave empty to use codex default (gpt-5.4) — recommended
          max_concurrent: 1
          timeout_ms: 300000
 
@@ -107,8 +111,8 @@ bun build ./src/cli.ts --compile --outfile ~/.duct-cli/duct-cli
        actual_model: "gpt-image-2"
    ```
 
-3. `./start.sh restart` → 로그에 `Plugin loaded: "duct" (endpoints: images)` 확인
-4. OpenAI 호환 호출:
+3. `./start.sh restart` → confirm `Plugin loaded: "duct" (endpoints: images)` in the logs
+4. OpenAI-compatible call:
 
    ```bash
    curl -s http://localhost:8300/v1/images/generations \
@@ -116,16 +120,16 @@ bun build ./src/cli.ts --compile --outfile ~/.duct-cli/duct-cli
      -H "Content-Type: application/json" \
      -d '{
        "model": "duct-image",
-       "prompt": "한글 인포그래픽: 전기차 충전 인프라 현황",
+       "prompt": "Korean infographic: EV charging infrastructure status",
        "response_format": "url"
      }'
    ```
 
-## CLI 명령
+## CLI commands
 
-### `duct image "<프롬프트>"`
+### `duct image "<prompt>"`
 
-인라인 프롬프트 → codex 호출 → 이미지 경로 포함 JSON 결과를 stdout으로.
+Inline prompt → codex call → JSON result with image paths to stdout.
 
 ```json
 {
@@ -138,16 +142,16 @@ bun build ./src/cli.ts --compile --outfile ~/.duct-cli/duct-cli
       "callId": "ig_xyz"
     }
   ],
-  "agentMessage": "이미지를 생성했습니다."
+  "agentMessage": "Image generated."
 }
 ```
 
 ### `duct openai:images --in req.json --out res.json`
 
-Star-CLIProxy 플러그인이 사용하는 파일 기반 인터페이스. stdout 노이즈 없이
-파일로만 I/O해 대용량 응답에 안전.
+The file-based interface used by the Star-CLIProxy plugin. It does I/O purely
+through files with no stdout noise, making it safe for large responses.
 
-**요청 (`req.json`)**
+**Request (`req.json`)**
 
 ```json
 {
@@ -157,7 +161,7 @@ Star-CLIProxy 플러그인이 사용하는 파일 기반 인터페이스. stdout
 }
 ```
 
-**응답 (`res.json`)** — OpenAI Images API 호환
+**Response (`res.json`)** — OpenAI Images API-compatible
 
 ```json
 {
@@ -174,18 +178,18 @@ Star-CLIProxy 플러그인이 사용하는 파일 기반 인터페이스. stdout
 }
 ```
 
-`response_format: "b64_json"`을 보내면 `data[].b64_json`에 base64 payload가
-실립니다 (같은 호스트 호출자는 `url` 모드가 압도적으로 저렴).
+Sending `response_format: "b64_json"` puts the base64 payload in `data[].b64_json`
+(for same-host callers, `url` mode is overwhelmingly cheaper).
 
-## 응답 모드: 기본 `url`, b64 옵트인
+## Response modes: `url` by default, b64 opt-in
 
-| 모드 | 트리거 | 응답 크기 (1024² PNG 기준) | 용도 |
-|------|--------|---------------------------|------|
-| `url` (기본) | 미지정 또는 `"url"` | 수백 B | LLM 에이전트, 동일 호스트 소비자 |
-| `b64_json` | `response_format: "b64_json"` | ~700 KB+ | 웹 프론트엔드, 원격 호출자 |
+| Mode | Trigger | Response size (1024² PNG) | Use case |
+|------|---------|---------------------------|----------|
+| `url` (default) | unspecified or `"url"` | a few hundred B | LLM agents, same-host consumers |
+| `b64_json` | `response_format: "b64_json"` | ~700 KB+ | web frontends, remote callers |
 
-같은 호스트 호출자는 `file://` 경로를 fs로 직접 읽어 base64와 동일한
-결과를 얻을 수 있습니다 (네트워크 ~2MB/장 절약):
+A same-host caller can read the `file://` path directly via fs to get the same
+result as base64 (saving ~2MB/image of network):
 
 ```ts
 const item = res.data[0];
@@ -194,101 +198,104 @@ const bytes = item.b64_json
   : await Bun.file(item.url.replace(/^file:\/\//, "")).bytes();
 ```
 
-## 옵션
+## Options
 
 ```
-duct image "프롬프트"             이미지 생성
-duct "프롬프트"                   이미지 생성 (image 키워드 생략 가능)
+duct image "prompt"               generate an image
+duct "prompt"                     generate an image (the "image" keyword may be omitted)
 duct openai:images --in req.json --out res.json
 
-  -m, --model <model>       codex 모델 지정 (기본: codex 설정값 gpt-5.4)
-  -t, --timeout-ms <ms>     타임아웃 (기본 300000)
-  -b, --bin <path>          codex 바이너리 경로 override
-  -v, --verbose             stderr에 [duct] 이벤트/폴링 로그
-      --in <file>           OpenAI 호환 입력 JSON 파일
-      --out <file>          OpenAI 호환 출력 JSON 파일
-  -h, --help                도움말
+  -m, --model <model>       specify codex model (default: codex config value gpt-5.4)
+  -t, --timeout-ms <ms>     timeout (default 300000)
+  -b, --bin <path>          override codex binary path
+  -v, --verbose             [duct] event/polling logs to stderr
+      --in <file>           OpenAI-compatible input JSON file
+      --out <file>          OpenAI-compatible output JSON file
+  -h, --help                help
 ```
 
-## 환경변수
+## Environment variables
 
-| 변수 | 필수 | 기본값 | 설명 |
-|------|------|--------|------|
-| `CODEX_BIN` | ⬜ | `codex` | codex 바이너리 경로 override |
-| `CODEX_HOME` | ⬜ | `~/.codex` | codex 홈 (생성 이미지가 `generated_images/{thread_id}/`에 저장) |
-| `DUCT_CLI_BIN` | ⬜ | `~/.duct-cli/duct-cli` | 플러그인 쪽에서 duct 바이너리 경로 override |
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `CODEX_BIN` | ⬜ | `codex` | override codex binary path |
+| `CODEX_HOME` | ⬜ | `~/.codex` | codex home (generated images saved under `generated_images/{thread_id}/`) |
+| `DUCT_CLI_BIN` | ⬜ | `~/.duct-cli/duct-cli` | override duct binary path from the plugin side |
 
-codex 바이너리 탐색 순서: `CODEX_BIN` → `$PATH`의 `codex` →
+codex binary lookup order: `CODEX_BIN` → `codex` on `$PATH` →
 `~/.npm-global/bin/codex` → `~/.bun/bin/codex` → `/usr/local/bin/codex` →
 `/opt/homebrew/bin/codex`.
 
-## 모델
+## Models
 
-| 모델 | 비고 |
-|------|------|
-| `gpt-5.4` *(권장)* | codex 기본. `image_gen` 도구를 자동 호출. ChatGPT 계정 그대로 사용 |
-| `gpt-image-2` | alias. 플러그인 가드가 자동으로 `--model` 인자를 떨궈 codex 기본으로 폴백 |
-| `dall-e-*` / `imagen-*` / `flux*` 등 | 플러그인이 자동 필터링 (codex의 ChatGPT 경로는 수용 안 함) |
+| Model | Notes |
+|-------|-------|
+| `gpt-5.4` *(recommended)* | codex default. Auto-invokes the `image_gen` tool. Uses the ChatGPT account as-is |
+| `gpt-image-2` | alias. The plugin guard automatically drops the `--model` arg and falls back to the codex default |
+| `dall-e-*` / `imagen-*` / `flux*`, etc. | auto-filtered by the plugin (codex's ChatGPT path doesn't accept them) |
 
-> `gpt-image-1`, `dall-e-3` 등 OpenAI 플랫폼 전용 이미지 모델명을 그대로
-> `codex --model`로 넘기면 거부당합니다. Star-CLIProxy 플러그인의
-> `isCodexCompatibleModel()` 가드가 이런 이름을 감지하면 `--model`을
-> 생략하고 codex 기본 설정이 `image_gen` 도구를 호출하도록 유도합니다.
+> Passing OpenAI platform-only image model names like `gpt-image-1` or `dall-e-3`
+> directly to `codex --model` gets rejected. When the Star-CLIProxy plugin's
+> `isCodexCompatibleModel()` guard detects such names, it omits `--model` and lets
+> the codex default config invoke the `image_gen` tool.
 
-## 개발
+## Development
 
 ```bash
-# 타입체크 (tsc --noEmit)
+# Typecheck (tsc --noEmit)
 bun run typecheck
 
-# 로컬 실행
-bun run start image "테스트 프롬프트" --verbose
+# Run locally
+bun run start image "test prompt" --verbose
 
-# 프로덕션 빌드 (macOS native binary, ~57MB)
+# Production build (macOS native binary, ~57MB)
 bun run build
 ```
 
-TypeScript strict mode, ESM, Bun APIs (`Bun.file`, `Bun.spawnSync`) 혼용.
+TypeScript strict mode, ESM, with a mix of Bun APIs (`Bun.file`, `Bun.spawnSync`).
 
-## 레이아웃
+## Layout
 
 ```
 src/
-  cli.ts      # 전체 구현 — argparse, codex spawn, 디렉토리 폴링,
-              #   thread_id → images, OpenAI 호환 응답 변환
+  cli.ts      # full implementation — argparse, codex spawn, directory polling,
+              #   thread_id → images, OpenAI-compatible response conversion
 
 dist/
-  duct-macos  # bun build --compile 산출물 (gitignored, Releases 권장)
+  duct-macos  # bun build --compile output (gitignored, prefer Releases)
 
-package.json  # bin: { duct: ./src/cli.ts }, build 스크립트
+package.json  # bin: { duct: ./src/cli.ts }, build scripts
 ```
 
-> 단일 파일 구성 — 복잡한 모듈 분할보다 `cli.ts` 안의 섹션 주석으로
-> 네비게이션. 이벤트 타입 / 유틸 / 폴링 / OpenAI 어댑터 / argparse / main.
+> Single-file layout — rather than complex module splitting, navigate via section
+> comments inside `cli.ts`: event types / utils / polling / OpenAI adapter /
+> argparse / main.
 
-## 제약 / 주의
+## Constraints / caveats
 
-- **디렉토리 폴링 기반 종료**: codex가 `turn.completed` 이후에도 이미지를
-  비동기로 떨어뜨릴 수 있어 5초 grace period 필요. 타이밍 레이스가 의심되면
-  `-v` 로 `[duct] 폴링: 이미지 N개 + turn 완료 → finalize` 로그 확인.
-- **ChatGPT 로그인 만료**: `codex login` 세션이 끊기면 duct도 실패.
-  `codex --version` 또는 `codex exec --json "ping"` 으로 주기 점검.
-- **stdin 이슈 방지**: duct-cli는 항상 `stdio: ['ignore', ...]`로 codex를
-  띄웁니다. 과거 codex의 `Reading additional input from stdin…` 대기로
-  멈추는 이슈 예방.
-- **동시성**: 기본 `max_concurrent: 1` — codex가 한 계정당 세션/레이트
-  제한을 걸기 때문. 병렬이 필요하면 플러그인 쪽에서 큐잉.
+- **Directory-polling-based termination**: codex may asynchronously drop images
+  even after `turn.completed`, so a 5-second grace period is needed. If you
+  suspect a timing race, check the `[duct] polling: N images + turn complete →
+  finalize` log with `-v`.
+- **ChatGPT login expiry**: if the `codex login` session drops, duct fails too.
+  Periodically check with `codex --version` or `codex exec --json "ping"`.
+- **stdin issue prevention**: duct-cli always launches codex with
+  `stdio: ['ignore', ...]`, preventing the past issue of stalling on codex's
+  `Reading additional input from stdin…` wait.
+- **Concurrency**: default `max_concurrent: 1` — because codex enforces
+  session/rate limits per account. If you need parallelism, queue on the plugin side.
 
-## 운영 메모
+## Operational notes
 
-- **배포**: `bun run build`로 만든 `dist/duct-macos`를 `~/.duct-cli/duct-cli`
-  에 복사. GitHub Releases에 업로드 권장 (repo에는 `.gitignore`로 제외).
-- **비밀**: `~/.codex/auth.json`에 ChatGPT OAuth 토큰이 들어있음. 절대
-  커밋/공유 금지. duct-cli는 이 파일을 직접 읽지 않고 codex를 통해서만
-  접근 — stdout/결과 JSON에 토큰이 흘러가지 않도록 설계.
-- **이미지 캐시**: `~/.codex/generated_images/{thread_id}/` — 주기적으로
-  정리하지 않으면 계속 쌓임. 호출자 쪽에서 소비 후 삭제를 권장.
+- **Deploy**: copy the `dist/duct-macos` built by `bun run build` to
+  `~/.duct-cli/duct-cli`. Uploading to GitHub Releases is recommended (excluded
+  from the repo via `.gitignore`).
+- **Secrets**: `~/.codex/auth.json` contains the ChatGPT OAuth token. Never
+  commit/share it. duct-cli does not read this file directly — it accesses it
+  only through codex, and is designed so the token never leaks into stdout/result JSON.
+- **Image cache**: `~/.codex/generated_images/{thread_id}/` — keeps accumulating
+  unless cleaned periodically. Callers are advised to delete after consuming.
 
-## 라이선스
+## License
 
 MIT — [LICENSE](LICENSE)
