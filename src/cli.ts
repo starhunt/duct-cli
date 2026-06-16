@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,10 +16,19 @@ const DEFAULT_TIMEOUT_MS = 300_000; // 5분
 // codex 이미지 아티팩트 저장 위치
 const CODEX_HOME = process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex");
 const GENERATED_IMAGES_DIR = path.join(CODEX_HOME, "generated_images");
+// codex 세션 rollout(JSONL) 저장 위치 — 0.140 회귀(#28526) 폴백에 사용
+const SESSIONS_DIR = path.join(CODEX_HOME, "sessions");
+
+// duct 전용으로 핀 고정한 codex 0.139 (있으면 우선 사용).
+// codex 0.140.0은 codex exec에서 image_gen 결과를 디스크에 안 쓰는 회귀가 있어
+// (openai/codex#28526), 네이티브 저장이 정상인 0.139를 우선한다.
+// 없으면 PATH의 codex(최신)로 떨어지고, rollout 폴백이 이미지를 복구한다.
+const PINNED_CODEX_039 = path.join(os.homedir(), ".duct-cli", "codex-0.139", "node_modules", ".bin", "codex");
 
 // codex 바이너리 경로 탐색 순서
 const CODEX_BIN_CANDIDATES = [
   process.env.CODEX_BIN,
+  PINNED_CODEX_039,
   "codex",
   path.join(os.homedir(), ".npm-global/bin/codex"),
   path.join(os.homedir(), ".bun/bin/codex"),
@@ -89,6 +99,11 @@ function resolveCodexBin(explicit?: string): string {
   if (explicit) return explicit;
   for (const candidate of CODEX_BIN_CANDIDATES) {
     try {
+      // 절대/상대 경로 후보는 파일 존재로 판정 (which는 PATH 전용)
+      if (candidate.includes("/")) {
+        if (existsSync(candidate)) return candidate;
+        continue;
+      }
       const result = Bun.spawnSync(["which", candidate]);
       if (result.exitCode === 0) return candidate;
     } catch {
@@ -140,6 +155,103 @@ async function findGeneratedImages(
     }
   } catch {
     // 디렉토리 없음 — 정상
+  }
+
+  return results;
+}
+
+// ---------------------------------------------------------------------------
+// rollout JSONL 폴백 (codex 0.140 회귀 #28526 대응)
+//
+// codex 0.140.0의 codex exec 경로는 image_gen 결과 PNG를 디스크
+// (~/.codex/generated_images/)에 쓰지 않는 회귀가 있다. 단, 생성된 이미지의
+// base64는 세션 rollout JSONL의 image_generation_call.result 에 그대로 남는다.
+// generated_images 폴링이 비면 rollout에서 base64를 뽑아 직접 PNG로 복구한다.
+// ---------------------------------------------------------------------------
+
+/** threadId가 파일명에 포함된 rollout JSONL 경로를 찾는다. */
+async function findRolloutFile(threadId: string): Promise<string | undefined> {
+  try {
+    const entries = await fs.readdir(SESSIONS_DIR, { recursive: true });
+    const match = entries.find(
+      (e) => typeof e === "string" && e.includes(threadId) && e.endsWith(".jsonl")
+    );
+    return match ? path.join(SESSIONS_DIR, match) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 임의로 중첩된 객체/배열에서 image_generation_call 노드를 수집한다. */
+function collectImageGenerationCalls(node: unknown, out: Array<Record<string, unknown>>): void {
+  if (Array.isArray(node)) {
+    for (const v of node) collectImageGenerationCalls(v, out);
+  } else if (node && typeof node === "object") {
+    const obj = node as Record<string, unknown>;
+    if (obj.type === "image_generation_call" && typeof obj.result === "string") {
+      out.push(obj);
+    }
+    for (const v of Object.values(obj)) collectImageGenerationCalls(v, out);
+  }
+}
+
+/**
+ * rollout JSONL에서 image_generation_call.result(base64)를 추출해
+ * generated_images/{threadId}/{callId}.png 로 저장하고 그 경로들을 반환한다.
+ */
+async function findImagesInRollout(
+  threadId: string,
+  verbose: boolean
+): Promise<Array<{ filePath: string; callId?: string; mimeType: string }>> {
+  const rollout = await findRolloutFile(threadId);
+  if (!rollout) {
+    if (verbose) console.error(`[duct] rollout 파일 없음 (thread=${threadId})`);
+    return [];
+  }
+
+  let content: string;
+  try {
+    content = await fs.readFile(rollout, "utf-8");
+  } catch {
+    return [];
+  }
+
+  const calls: Array<Record<string, unknown>> = [];
+  for (const line of content.split("\n")) {
+    if (!line.includes('"image_generation_call"') || !line.includes('"result"')) continue;
+    try {
+      collectImageGenerationCalls(JSON.parse(line), calls);
+    } catch {
+      // 깨진 라인 무시
+    }
+  }
+
+  if (calls.length === 0) return [];
+
+  const outDir = path.join(GENERATED_IMAGES_DIR, threadId);
+  await fs.mkdir(outDir, { recursive: true });
+
+  const results: Array<{ filePath: string; callId?: string; mimeType: string }> = [];
+  let idx = 0;
+  const seen = new Set<string>();
+  for (const call of calls) {
+    const b64 = call.result as string;
+    if (typeof b64 !== "string" || b64.length < 100 || seen.has(b64)) continue;
+    seen.add(b64);
+    const rawId = typeof call.id === "string" ? call.id : `ig_recovered_${idx}`;
+    const callId = /^ig_[a-z0-9]+$/i.test(rawId) ? rawId : `ig_recovered_${idx}`;
+    const filePath = path.join(outDir, `${callId}.png`);
+    try {
+      await fs.writeFile(filePath, Buffer.from(b64, "base64"));
+      results.push({ filePath, callId, mimeType: "image/png" });
+      idx++;
+    } catch {
+      // 쓰기 실패 무시
+    }
+  }
+
+  if (verbose && results.length > 0) {
+    console.error(`[duct] rollout 폴백: ${results.length}개 이미지 복구 → ${outDir}`);
   }
 
   return results;
@@ -201,16 +313,20 @@ async function runCodexImage(opts: {
 
       const images: ImageResult["images"] = [];
       if (threadId) {
-        const found = await findGeneratedImages(threadId);
+        let found = await findGeneratedImages(threadId);
+        if (opts.verbose) {
+          console.error(`[duct] generated_images/${threadId}/ 에서 ${found.length}개 발견`);
+        }
+        // codex 0.140 회귀(#28526): 디스크 미저장 시 rollout에서 base64 복구
+        if (found.length === 0) {
+          found = await findImagesInRollout(threadId, opts.verbose);
+        }
         for (const img of found) {
           images.push({
             path: img.filePath,
             mimeType: img.mimeType,
             callId: img.callId,
           });
-        }
-        if (opts.verbose) {
-          console.error(`[duct] generated_images/${threadId}/ 에서 ${images.length}개 발견`);
         }
       }
 
